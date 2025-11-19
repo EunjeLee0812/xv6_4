@@ -349,6 +349,16 @@ sfence_vma()
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
 
+// pa4: page struct
+struct page{
+	struct page *next;
+	struct page *prev;
+	pagetable_t  pagetable;
+	char *vaddr;
+};
+
+
+
 #endif // __ASSEMBLER__
 
 #define PGSIZE 4096 // bytes per page
@@ -380,3 +390,4 @@ typedef uint64 *pagetable_t; // 512 PTEs
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
+

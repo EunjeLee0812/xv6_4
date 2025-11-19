@@ -23,6 +23,12 @@ struct {
   struct run *freelist;
 } kmem;
 
+// pa4: struct for page control
+struct page pages[PHYSTOP/PGSIZE];
+struct page *page_lru_head;
+int num_free_pages;
+int num_lru_pages;
+
 void
 kinit()
 {
@@ -65,6 +71,7 @@ kfree(void *pa)
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
+// pa4: kalloc function
 void *
 kalloc(void)
 {
