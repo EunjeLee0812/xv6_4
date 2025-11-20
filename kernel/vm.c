@@ -14,6 +14,7 @@ struct page *lru_tail = 0;
 struct spinlock lru_lock;
 
 static uint8 *swap_bitmap;
+static uint32 swap_slots;
 static struct spinlock swap_lock;
 
 pagetable_t kernel_pagetable;
@@ -455,4 +456,16 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+void
+swapinit(void)
+{
+    swap_bitmap = kalloc();
+    if(swap_bitmap == 0) panic("swapinit");
+    memset(swap_bitmap, 0, PGSIZE);
+    int swap_blocks = SWAPMAX - SWAPBASE + 1;
+    swap_slots = swap_blocks / (PGSIZE / BSIZE);
+    initlock(&swap_lock,"swap");
+    initlock(&lru_lock, "lru");
 }
