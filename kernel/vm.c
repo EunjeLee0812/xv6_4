@@ -627,3 +627,66 @@ swapout(void)
   return 0;
 }
 
+
+int
+swapin(pagetable_t pagetable, uint64 va)
+{
+  // 1. va를 페이지 경계로 내림 (페이지 시작 주소)
+  va = PGROUNDDOWN(va);
+
+  // 2. 해당 va의 PTE를 찾는다.
+  pte_t *pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return -1;  // PTE 자체가 없으면 이상한 경우
+
+  // 3. 정말로 "스왑된 페이지"인지 확인
+  if((*pte & PTE_SWAPPED) == 0 || (*pte & PTE_V) != 0)
+    return -1;  // swapin 대상이 아님
+
+  // 4. PTE에 저장해 둔 slot 번호 꺼내기
+  //    swapout에서  *pte = (slot<<10) | flags | PTE_SWAPPED;  했으므로
+  //    PTE2PA(*pte) = (slot << 12) => slot = PTE2PA(*pte) / PGSIZE;
+  int slot = PTE2PA(*pte) / PGSIZE;
+
+  // 5. 새 물리 페이지 한 장 할당
+  uint64 pa = (uint64)kalloc();
+  if(pa == 0){
+    // kalloc 안에서 swapout을 이미 시도했을 것이고,
+    // 그래도 못 얻은 상황이면 실패로 처리
+    return -1;
+  }
+
+  // 6. 디스크의 해당 slot에서 페이지 내용을 읽어와서 pa에 채운다.
+  swapread(pa, slot);
+
+  // 7. swap slot 반납 (이제 이 slot은 다시 재사용 가능)
+  free_swap_slot(slot);
+
+  // 8. PTE 갱신:
+  //    - PPN 자리에 새 물리주소(pa)를 넣고
+  //    - PTE_SWAPPED는 내리고
+  //    - PTE_V는 세운다.
+  uint64 flags = PTE_FLAGS(*pte);
+
+  flags &= ~PTE_SWAPPED;  // 더 이상 스왑 상태 아님
+
+  // 필요하다면 A비트는 0으로 둬도 되고, 그냥 flags에 포함된 그대로 놔둬도 됨.
+  // 여기서는 그냥 그대로 사용.
+
+  *pte = PA2PTE(pa) | flags | PTE_V;
+
+  // 9. LRU 리스트에 다시 등록
+  //    pa -> 몇 번째 페이지인지 계산해서 pages[]에서 struct page*를 찾는다.
+  int idx = pa / PGSIZE;         // pa는 0~PHYSTOP 범위라고 가정
+  struct page *pg = &pages[idx];
+
+  pg->pagetable = pagetable;
+  pg->vaddr     = (char*)va;
+
+  acquire(&lru_lock);
+  lru_add(pg);
+  release(&lru_lock);
+
+  return 0;
+}
+

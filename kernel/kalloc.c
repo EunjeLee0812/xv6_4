@@ -72,18 +72,35 @@ kfree(void *pa)
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
 // pa4: kalloc function
-void *
+
+void*
 kalloc(void)
 {
-  struct run *r;
+    acquire(&kmem.lock);
+    struct run *r = kmem.freelist;
+    if (r == 0) {
+        release(&kmem.lock);
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
+        // free page 없음 → swapout 시도
+        if (swapout() < 0) {
+            // LRU도 비어있음 → 진짜 OOM
+            printf("kalloc: out of memory\n");
+            return 0;
+        }
+
+        // swapout 성공했으니 다시 잡아본다
+        acquire(&kmem.lock);
+        r = kmem.freelist;
+        if (r == 0) {
+            release(&kmem.lock);
+            return 0;
+        }
+    }
+
     kmem.freelist = r->next;
-  release(&kmem.lock);
+    release(&kmem.lock);
 
-  if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
-  return (void*)r;
+    memset((char*)r, 0, PGSIZE);
+    return (void*)r;
 }
+
