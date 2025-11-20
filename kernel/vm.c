@@ -9,6 +9,13 @@
 /*
  * the kernel's page table.
  */
+struct page *lru_head = 0;
+struct page *lru_tail = 0;
+struct spinlock lru_lock;
+
+static uint8 *swap_bitmap;
+static struct spinlock swap_lock;
+
 pagetable_t kernel_pagetable;
 
 extern char etext[];  // kernel.ld sets this to end of kernel code.
@@ -449,7 +456,3 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
-
-struct page *lru_head = 0;
-struct page *lru_tail = 0;
-struct spinlock lru_lock;
