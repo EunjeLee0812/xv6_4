@@ -698,42 +698,52 @@ nameiparent(char *path, char *name)
   return namex(path, 1, name);
 }
 
-// pa4: swapread
 void
-swapread(uint64 ptr, int blkno)
-{
-  struct buf *bp;
-  int i;
-  const int BLKS_PER_PG = PGSIZE/BSIZE;
-
-  if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
-    panic("swapread: blkno exceeded range");
-
-  for(i = 0; i < BLKS_PER_PG; i++){
-    nr_sectors_read++;
-    bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
-    if(either_copyout(1, ptr + i * BSIZE, bp->data, BSIZE) == -1)
-      panic("swapread: either_copyout failed");
-    brelse(bp);
-  }
-}
-
-// pa4: swapwrite
-void
-swapwrite(uint64 ptr, int blkno)
+swapread(uint64 pa, int slot)
 {
   struct buf *bp;
   int i;
   const int BLKS_PER_PG = PGSIZE / BSIZE;
 
-  if (blkno < 0 || blkno >= SWAPMAX / BLKS_PER_PG)
-    panic("swapwrite: blkno exceeded range");
+  // slot 번호가 유효 범위인지 체크
+  if (slot < 0 || slot >= SWAPMAX / BLKS_PER_PG)
+    panic("swapread: slot exceeded range");
+
+  for(i = 0; i < BLKS_PER_PG; i++){
+    nr_sectors_read++;
+
+    // slot 번째 페이지의 i번째 블록을 읽어온다.
+    bp = bread(0, SWAPBASE + BLKS_PER_PG * slot + i);
+
+    // ★ 목적지가 커널 주소이므로 user_dst = 0
+    // bp->data (디스크에서 읽어온 내용) → pa + i*BSIZE 로 복사
+    if(either_copyout(0, pa + i * BSIZE, bp->data, BSIZE) == -1)
+      panic("swapread: either_copyout failed");
+
+    brelse(bp);
+  }
+}
+
+void
+swapwrite(uint64 pa, int slot)
+{
+  struct buf *bp;
+  int i;
+  const int BLKS_PER_PG = PGSIZE / BSIZE;
+
+  if (slot < 0 || slot >= SWAPMAX / BLKS_PER_PG)
+    panic("swapwrite: slot exceeded range");
 
   for(i = 0; i < BLKS_PER_PG; i++){
     nr_sectors_write++;
-    bp = bread(0, SWAPBASE + BLKS_PER_PG * blkno + i);
-    if(either_copyin(bp->data, 1, ptr + i * BSIZE, BSIZE) == -1)
+
+    bp = bread(0, SWAPBASE + BLKS_PER_PG * slot + i);
+
+    // ★ src가 커널 주소이므로 user_src = 0
+    // pa + i*BSIZE → bp->data 로 복사
+    if(either_copyin(bp->data, 0, pa + i * BSIZE, BSIZE) == -1)
       panic("swapwrite: either_copyin failed");
+
     bwrite(bp);
     brelse(bp);
   }
