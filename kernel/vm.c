@@ -449,3 +449,7 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+struct page *lru_head = 0;
+struct page *lru_tail = 0;
+struct spinlock lru_lock;
