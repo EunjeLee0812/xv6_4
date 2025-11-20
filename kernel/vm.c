@@ -62,7 +62,6 @@ page_to_pa(struct page *pg)
 void
 lru_add(struct page *pg)
 {
-    acquire(&lru_lock);
     if(lru_head == 0) {
         lru_head = lru_tail = pg;
         pg->next = pg->prev = pg; // 자기 자신 가리키는 원형 리스트
@@ -74,13 +73,11 @@ lru_add(struct page *pg)
         lru_head->prev = pg;
         lru_tail = pg;
     }
-    release(&lru_lock);
 }
 
 void
 lru_remove(struct page *pg)
 {
-    acquire(&lru_lock);
     if(pg->next == 0 || pg->prev == 0) {
         release(&lru_lock);
         return;
@@ -95,7 +92,6 @@ lru_remove(struct page *pg)
         pg->next->prev = pg->prev;
     }
     pg->next = pg->prev = 0;
-    release(&lru_lock);
 }
 
 
@@ -547,3 +543,87 @@ swapinit(void)
     initlock(&swap_lock,"swap");
     initlock(&lru_lock, "lru");
 }
+
+int
+swapout(void)
+{
+  // 1. LRU에서 victim 후보를 찾는다 (clock 알고리즘 비슷하게)
+  acquire(&lru_lock);
+
+  if(lru_head == 0){
+    release(&lru_lock);
+    return -1; // 스왑할 유저 페이지가 없다 → 진짜 OOM
+  }
+
+  struct page *cand = lru_head;
+
+  while(1){
+    pte_t *pte = walk(cand->pagetable, (uint64)cand->vaddr, 0);
+    if(pte == 0)
+      panic("swapout: no pte");
+
+    if((*pte & PTE_V) == 0){
+      // 이론상 LRU에는 present page만 있어야 하는데,
+      // 혹시라도 이미 스왑된 게 섞였으면 그냥 다음으로 넘김
+      cand = cand->next;
+    } else if(*pte & PTE_A){
+      // 최근에 접근된 페이지 → 한 번 봐주고 A 비트만 내림 (2nd chance)
+      *pte &= ~PTE_A;
+
+      // clock: head를 다음으로, cand를 tail로 보내는 효과
+      lru_head = cand->next;
+      lru_tail = cand;
+      cand = lru_head;
+    } else {
+      // PTE_A == 0 이면 victim으로 사용
+      break;
+    }
+  }
+
+  struct page *victim = cand;
+
+  // LRU 리스트에서 제거
+  lru_remove(victim);
+  release(&lru_lock);
+
+  // 2. swap slot 하나 할당
+  int slot = alloc_swap_slot();
+  if(slot < 0){
+    // 스왑 슬롯도 없다 → 다시 LRU에 되돌려놓고 실패
+    acquire(&lru_lock);
+    lru_add(victim);
+    release(&lru_lock);
+    return -1;
+  }
+
+  // 3. 물리주소 계산해서 디스크에 페이지 내용 쓰기
+  uint64 pa = page_to_pa(victim);
+  swapwrite(pa, slot);   // ptr = 커널 주소(pa), slot = swap slot 인덱스
+
+  // 4. PTE 갱신: 메모리에서 빠지고 디스크에 있음 표시
+  pte_t *pte = walk(victim->pagetable, (uint64)victim->vaddr, 0);
+  if(pte == 0)
+    panic("swapout: pte vanished");
+
+  uint64 flags = PTE_FLAGS(*pte);
+
+  // 이제 이 PTE는 "메모리에는 없음, 스왑에 있음" 상태로 만든다.
+  flags &= ~PTE_V;  // 유효하지 않음 (page fault 발생시키기 위함)
+  flags &= ~PTE_A;  // accessed 비트도 정리
+
+  // PPN(물리주소 자리)에 slot 번호를 넣고, SWAPPED 플래그를 세운다.
+  //   PTE2PA(*pte) = (PPN << 12) 이므로
+  //   나중에 slot = PTE2PA(*pte) / PGSIZE 로 다시 꺼낼 수 있다.
+  *pte = ((uint64)slot << 10) | flags | PTE_SWAPPED;
+
+  // 5. 실제 물리 페이지 free
+  kfree((void*)pa);
+
+  // 6. page 메타데이터 정리(선택)
+  victim->pagetable = 0;
+  victim->vaddr = 0;
+  // next/prev는 lru_remove에서 이미 0으로 만들어줌
+
+  return 0;
+}
+
