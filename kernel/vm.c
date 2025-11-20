@@ -23,6 +23,35 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+static int
+alloc_swap_slot(void)
+{
+    acquire(&swap_lock);
+    for(int i = 0; i < swap_slots; i++){
+        int byte = i / 8;
+        int bit  = i % 8;
+        if((swap_bitmap[byte] & (1 << bit)) == 0){
+            swap_bitmap[byte] |= (1 << bit);
+            release(&swap_lock);
+            return i;
+        }
+    }
+    release(&swap_lock);
+    return -1;
+}
+
+static void
+free_swap_slot(int idx)
+{
+    acquire(&swap_lock);
+    int byte = idx / 8;
+    int bit  = idx % 8;
+    swap_bitmap[byte] &= ~(1 << bit);
+    release(&swap_lock);
+}
+
+
+
 // Make a direct-map page table for the kernel.
 pagetable_t
 kvmmake(void)
