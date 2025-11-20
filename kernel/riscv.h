@@ -391,3 +391,5 @@ struct page{
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
 
+#define PTE_A(1L << 6)
+#define PTE_SWAPPED (1L << 9)
