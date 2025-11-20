@@ -17,6 +17,8 @@ static uint8 *swap_bitmap;
 static uint32 swap_slots;
 static struct spinlock swap_lock;
 
+extern struct page pages[PHYSTOP/PGSIZE];
+
 pagetable_t kernel_pagetable;
 
 extern char etext[];  // kernel.ld sets this to end of kernel code.
@@ -48,6 +50,13 @@ free_swap_slot(int idx)
     int bit  = idx % 8;
     swap_bitmap[byte] &= ~(1 << bit);
     release(&swap_lock);
+}
+
+static uint64
+page_to_pa(struct page *pg)
+{
+  int idx = pg - pages;
+  return (uint64)idx * PGSIZE;
 }
 
 void
@@ -533,8 +542,8 @@ swapinit(void)
     swap_bitmap = kalloc();
     if(swap_bitmap == 0) panic("swapinit");
     memset(swap_bitmap, 0, PGSIZE);
-    int swap_blocks = SWAPMAX - SWAPBASE + 1;
-    swap_slots = swap_blocks / (PGSIZE / BSIZE);
+    const int BLKS_PER_PG = PGSIZE / BSIZE;
+    swap_slots = SWAPMAX / BLKS_PER_PG;
     initlock(&swap_lock,"swap");
     initlock(&lru_lock, "lru");
 }
