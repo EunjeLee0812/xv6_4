@@ -50,6 +50,46 @@ free_swap_slot(int idx)
     release(&swap_lock);
 }
 
+void
+lru_add(struct page *pg)
+{
+    acquire(&lru_lock);
+    if(lru_head == 0) {
+        lru_head = lru_tail = pg;
+        pg->next = pg->prev = pg; // 자기 자신 가리키는 원형 리스트
+    }
+    else{
+        pg->prev = lru_tail;
+        pg->next = lru_head;
+        lru_tail->next = pg;
+        lru_head->prev = pg;
+        lru_tail = pg;
+    }
+    release(&lru_lock);
+}
+
+void
+lru_remove(struct page *pg)
+{
+    acquire(&lru_lock);
+    if(pg->next == 0 || pg->prev == 0) {
+        release(&lru_lock);
+        return;
+    }
+    if(pg == lru_head && pg == lru_tail) {
+        lru_head = lru_tail = 0;
+    }
+    else{
+        if(pg == lru_head) lru_head = pg->next;
+        if(pg == lru_tail) lru_tail = pg->prev;
+        pg->prev->next = pg->next;
+        pg->next->prev = pg->prev;
+    }
+    pg->next = pg->prev = 0;
+    release(&lru_lock);
+}
+
+
 
 
 // Make a direct-map page table for the kernel.
