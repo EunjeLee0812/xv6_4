@@ -272,10 +272,28 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
+    
     if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if(*pte & PTE_V){
+        // 메모리에 실제로 올라와 있는 페이지
+        uint64 pa = PTE2PA(*pte);
+
+        // LRU 리스트에서 제거 시도
+        int idx = pa / PGSIZE;          // 이 물리 페이지가 pages[]에서 몇 번째인지
+        struct page *pg = &pages[idx];
+        lru_remove(pg);                 // swappable page면 빼고, 아니면 내부에서 그냥 return
+
+        // 물리 메모리 해제
+        kfree((void*)pa);
+
+      } else if(*pte & PTE_SWAPPED){
+        // 이미 스왑된 페이지 → 디스크 slot을 반환해야 함
+        int slot = PTE2PA(*pte) / PGSIZE;   // swapout 때 (slot << 10)을 PTE에 넣었으므로
+        free_swap_slot(slot);
+        // LRU에는 이미 swapout 시점에 제거했으므로 lru_remove는 필요 없음
+      }
     }
+
     *pte = 0;
   }
 }
@@ -334,6 +352,21 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
       return 0;
     }
   }
+
+    // === 여기부터 pa4: LRU 리스트에 등록 ===
+    // mem 은 kalloc이 준 물리 페이지의 커널 주소(=사실상 pa)
+    uint64 pa = (uint64)mem;
+    int idx = pa / PGSIZE;          // 이 물리 페이지가 pages[]에서 몇 번째인지
+
+    struct page *pg = &pages[idx];
+    pg->pagetable = pagetable;      // 어느 프로세스의 페이지인지
+    pg->vaddr     = (char*)a;       // 이 물리페이지가 매핑된 유저 가상주소
+    pg->next = pg->prev = 0;        // (안 해도 BSS가 0이지만 안전하게)
+
+    lru_add(pg);                    // LRU(원형 리스트) tail 쪽에 붙이기
+    // === pa4: LRU 등록 끝 ===
+  } 
+
   return newsz;
 }
 
