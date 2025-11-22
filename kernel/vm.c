@@ -27,6 +27,14 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 extern char trampoline[]; // trampoline.S
 
 static int
+pa2pageidx(uint64 pa)
+{
+  if(pa < KERNBASE || pa >= PHYSTOP)
+    panic("pa2pageidx: pa out of range");
+  return (pa - KERNBASE) / PGSIZE;
+}
+
+static int
 alloc_swap_slot(void)
 {
     acquire(&swap_lock);
@@ -272,10 +280,20 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       if(*pte & PTE_SWAPPED){          // 네가 정의한 "스왑됐다" 비트
         // 이 페이지는 디스크에만 있고, 메모리에는 없음.
         // do_free == 1 이면, 스왑 슬롯도 같이 free.
+        
         if(do_free){
-          int slot = (PTE2PA(*pte) / PGSIZE);  // PTE에서 스왑 슬롯 번호 뽑는 매크로 (네가 만든대로)
-          free_swap_slot(slot);         // 스왑 공간 반환 (네 함수 이름에 맞게)
+          uint64 pa = PTE2PA(*pte);
+
+          // LRU에서 제거
+          int idx = pa2pageidx(pa);
+          struct page *pg = &pages[idx];
+          acquire(&lru_lock);
+          lru_remove(pg);
+          release(&lru_lock);
+
+          kfree((void*)pa);
         }
+          
         *pte = 0;                       // PTE 비우고 다음 페이지로
         continue;
       }
@@ -360,11 +378,16 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
     // kalloc이 리턴한 mem은 "해당 물리 페이지의 커널 주소"라고 보면 되고,
     // xv6에선 커널주소 == 물리주소라서 바로 /PGSIZE 해서 인덱스로 사용 가능.
     uint64 pa = (uint64)mem;
-    int idx = pa / PGSIZE;
+    int idx = pa2pageidx(pa);           // ✅ KERNBASE 보정
+
     struct page *pg = &pages[idx];
     pg->pagetable = pagetable;
     pg->vaddr     = (char*)a;
+
+    acquire(&lru_lock);                 // ✅ 락 잡고
     lru_add(pg);
+    release(&lru_lock);                 // ✅ 락 풀기
+
   }
 
   return newsz;
@@ -455,11 +478,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       }
 
       // LRU 등록
-      int idx = (uint64)mem / PGSIZE;
+      uint64 pa_child = (uint64)mem;
+      int idx = pa2pageidx(pa_child);
+
       struct page *pg = &pages[idx];
       pg->pagetable = new;
       pg->vaddr     = (char*)i;
+      acquire(&lru_lock);
       lru_add(pg);
+      release(&lru_lock);
 
     } else if(*pte & PTE_SWAPPED){
       // 2) 부모가 swapout된 페이지인 경우
@@ -484,7 +511,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       }
 
       // LRU 등록
-      int idx = (uint64)mem / PGSIZE;
+      uint64 pa_child = (uint64)mem;
+      int idx = pa2pageidx(pa_child);
       struct page *pg = &pages[idx];
       pg->pagetable = new;
       pg->vaddr     = (char*)i;
