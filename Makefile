@@ -141,8 +141,9 @@ UPROGS=\
 	$U/_zombie\
 	$U/_swaptest\
 	$U/_memhog\
-	$U/_testswap
-
+	$U/_testswap\
+    $U/_forkswap\
+	$U/_swapstress
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
 

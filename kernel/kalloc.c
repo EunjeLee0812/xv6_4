@@ -73,34 +73,36 @@ kfree(void *pa)
 // Returns 0 if the memory cannot be allocated.
 // pa4: kalloc function
 
-void*
+void *
 kalloc(void)
 {
+  struct run *r;
+
+  for(;;) {
+    // 1) 먼저 평범하게 freelist에서 한 번 뽑아봅니다.
     acquire(&kmem.lock);
-    struct run *r = kmem.freelist;
-    if (r == 0) {
-        release(&kmem.lock);
-
-        // free page 없음 → swapout 시도
-        if (swapout() < 0) {
-            // LRU도 비어있음 → 진짜 OOM
-            printf("kalloc: out of memory\n");
-            return 0;
-        }
-
-        // swapout 성공했으니 다시 잡아본다
-        acquire(&kmem.lock);
-        r = kmem.freelist;
-        if (r == 0) {
-            release(&kmem.lock);
-            return 0;
-        }
+    r = kmem.freelist;
+    if(r){
+      kmem.freelist = r->next;
+      release(&kmem.lock);
+      break;              // 페이지 하나 성공적으로 확보 → 루프 탈출
     }
-
-    kmem.freelist = r->next;
     release(&kmem.lock);
 
-    memset((char*)r, 0, PGSIZE);
-    return (void*)r;
+    // 2) 여기서는 어떤 스핀락도 잡으면 안 됩니다!
+    //    이 상태에서 swapout() 으로 물리 페이지 하나 디스크로 내보내기
+    if(swapout() < 0){
+      // 스왑할 것도 없어서 swapout 실패 → 그냥 포기
+      r = 0;
+      break;
+    }
+    // 3) swapout 성공했으면, 다시 freelist를 보러 루프 맨 앞으로
+    //    (새로 free된 페이지가 freelist에 들어갔을 테니까)
+  }
+
+  if(r)
+    memset((char*)r, 5, PGSIZE);  // 디버그용 패턴 채우기
+
+  return (void*)r;
 }
 

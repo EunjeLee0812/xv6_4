@@ -518,7 +518,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       pg->vaddr     = (char*)i;
       acquire(&lru_lock);
       lru_add(pg);
-      acquire(&lru_lock);
+      release(&lru_lock);
 
       // 부모 쪽은 그대로 스왑 상태 유지 (PTE는 건드리지 않음)
 
