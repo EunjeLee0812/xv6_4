@@ -18,7 +18,7 @@ static uint8 *swap_bitmap;
 static uint32 swap_slots;
 static struct spinlock swap_lock;
 
-extern struct page pages[PHYSTOP/PGSIZE];
+extern struct page pages[(PHYSTOP-KERNBASE)/PGSIZE];
 
 pagetable_t kernel_pagetable;
 
@@ -57,7 +57,7 @@ static uint64
 page_to_pa(struct page *pg)
 {
   int idx = pg - pages;
-  return (uint64)idx * PGSIZE;
+  return KERNBASE +  (uint64)idx * PGSIZE;
 }
 
 void
@@ -768,7 +768,7 @@ swapin(pagetable_t pagetable, uint64 va)
 
   // 9. LRU 리스트에 다시 등록
   //    pa -> 몇 번째 페이지인지 계산해서 pages[]에서 struct page*를 찾는다.
-  int idx = pa / PGSIZE;         // pa는 0~PHYSTOP 범위라고 가정
+  int idx = (pa-KERNBASE) / PGSIZE;         // pa는 0~PHYSTOP 범위라고 가정
   struct page *pg = &pages[idx];
 
   pg->pagetable = pagetable;

@@ -24,7 +24,7 @@ struct {
 } kmem;
 
 // pa4: struct for page control
-struct page pages[PHYSTOP/PGSIZE];
+struct page pages[(PHYSTOP-KERNBASE)/PGSIZE];
 struct page *page_lru_head;
 int num_free_pages;
 int num_lru_pages;
