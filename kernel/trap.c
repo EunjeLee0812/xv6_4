@@ -72,23 +72,19 @@ usertrap(void)
     // 별도 처리 없음.
 
   }
- else if(scause == 12 || scause == 13 || scause == 15){
-    // ★ 여기서 page fault 처리
-    // scause == 12 : instruction page fault (코드를 가져오려다 실패)
-    // scause == 13 : load page fault        (메모리 읽기 실패)
-    // scause == 15 : store/AMO page fault   (메모리 쓰기 실패)
+  else if(scause == 12 || scause == 13 || scause == 15){
+    uint64 va = r_stval();
 
-    uint64 va = r_stval();  // fault가 발생한 가상 주소 (또는 PC)
-
-    // pa4: 이 va가 "스왑된 페이지"라면 다시 디스크에서 읽어온다.
-    if(swapin(p->pagetable, va) < 0){
-      // swapin 실패 → 스왑된 페이지가 아니거나, 복구 실패
+    // 1) 애초에 사용자 가상주소 범위 밖이면 바로 kill
+    if(va >= MAXVA) {
+      printf("usertrap: invalid va=0x%lx pid=%d\n", va, p->pid);
+      setkilled(p);
+    } else if(swapin(p->pagetable, va) < 0){
+      // 2) swapin 실패 → 이 주소는 스왑된 페이지가 아님 (불법 접근)
       printf("usertrap: page fault swapin failed scause=0x%lx pid=%d va=0x%lx\n",
              scause, p->pid, va);
       setkilled(p);
     }
-    // swapin 성공하면 PTE가 다시 valid가 되었으므로
-    // usertrapret()으로 돌아가서 같은 명령을 다시 실행하면 이번엔 정상 동작.
   }
 
   

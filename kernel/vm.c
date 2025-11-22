@@ -664,9 +664,6 @@ swapinit(void)
 int
 swapout(void)
 {
-
-    printf("swapout called\n");
-    
   // 1. LRU에서 victim 후보를 찾는다 (clock 알고리즘 비슷하게)
   acquire(&lru_lock);
 
@@ -751,7 +748,6 @@ swapout(void)
 int
 swapin(pagetable_t pagetable, uint64 va)
 {
-  printf("swapin called\n");
   // 1. va를 페이지 경계로 내림 (페이지 시작 주소)
   va = PGROUNDDOWN(va);
 
