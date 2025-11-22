@@ -71,24 +71,28 @@ usertrap(void)
     // 디바이스 인터럽트인 경우 (타이머, 디스크, UART 등)
     // 별도 처리 없음.
 
-  } else if(scause == 13 || scause == 15){
-    // ★ 여기서 page fault 처리 (load/store page fault)
-    // scause == 13 : load page fault
-    // scause == 15 : store/AMO page fault
+  }
+ else if(scause == 12 || scause == 13 || scause == 15){
+    // ★ 여기서 page fault 처리
+    // scause == 12 : instruction page fault (코드를 가져오려다 실패)
+    // scause == 13 : load page fault        (메모리 읽기 실패)
+    // scause == 15 : store/AMO page fault   (메모리 쓰기 실패)
 
-    uint64 va = r_stval();  // fault가 발생한 가상 주소
+    uint64 va = r_stval();  // fault가 발생한 가상 주소 (또는 PC)
 
-    // pa4: 이 va가 스왑된 페이지라면 메모리로 다시 불러온다.
+    // pa4: 이 va가 "스왑된 페이지"라면 다시 디스크에서 읽어온다.
     if(swapin(p->pagetable, va) < 0){
-      // swapin 실패 → 이 프로세스는 더 못 살린다고 판단
-      printf("usertrap: swapin failed pid=%d va=0x%lx\n", p->pid, va);
+      // swapin 실패 → 스왑된 페이지가 아니거나, 복구 실패
+      printf("usertrap: page fault swapin failed scause=0x%lx pid=%d va=0x%lx\n",
+             scause, p->pid, va);
       setkilled(p);
     }
-    // swapin이 성공하면, PTE가 다시 valid가 되었으므로
-    // usertrapret()을 통해 유저 모드로 돌아갈 때
-    // 같은 명령을 다시 실행하면 이번에는 정상 동작함.
+    // swapin 성공하면 PTE가 다시 valid가 되었으므로
+    // usertrapret()으로 돌아가서 같은 명령을 다시 실행하면 이번엔 정상 동작.
+  }
 
-  } else {
+  
+  else {
     // 위에 해당하지 않는 예외/인터럽트는 전부 "예상치 못한 상황"으로 처리
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", scause, p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());

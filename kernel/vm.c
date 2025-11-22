@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
 
 /*
  * the kernel's page table.
@@ -79,7 +80,6 @@ void
 lru_remove(struct page *pg)
 {
     if(pg->next == 0 || pg->prev == 0) {
-        release(&lru_lock);
         return;
     }
     if(pg == lru_head && pg == lru_tail) {
@@ -262,41 +262,42 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   uint64 a;
   pte_t *pte;
 
-  if((va % PGSIZE) != 0)
-    panic("uvmunmap: not aligned");
-
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
+    pte = walk(pagetable, a, 0);
+    if(pte == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
-      panic("uvmunmap: not a leaf");
-    
-    if(do_free){
-      if(*pte & PTE_V){
-        // 메모리에 실제로 올라와 있는 페이지
-        uint64 pa = PTE2PA(*pte);
 
-        // LRU 리스트에서 제거 시도
-        int idx = pa / PGSIZE;          // 이 물리 페이지가 pages[]에서 몇 번째인지
-        struct page *pg = &pages[idx];
-        lru_remove(pg);                 // swappable page면 빼고, 아니면 내부에서 그냥 return
-
-        // 물리 메모리 해제
-        kfree((void*)pa);
-
-      } else if(*pte & PTE_SWAPPED){
-        // 이미 스왑된 페이지 → 디스크 slot을 반환해야 함
-        int slot = PTE2PA(*pte) / PGSIZE;   // swapout 때 (slot << 10)을 PTE에 넣었으므로
-        free_swap_slot(slot);
-        // LRU에는 이미 swapout 시점에 제거했으므로 lru_remove는 필요 없음
+    if((*pte & PTE_V) == 0){
+      // ⭐ 여기서부터 스왑된 페이지 처리
+      if(*pte & PTE_SWAPPED){          // 네가 정의한 "스왑됐다" 비트
+        // 이 페이지는 디스크에만 있고, 메모리에는 없음.
+        // do_free == 1 이면, 스왑 슬롯도 같이 free.
+        if(do_free){
+          int slot = (PTE2PA(*pte) / PGSIZE);  // PTE에서 스왑 슬롯 번호 뽑는 매크로 (네가 만든대로)
+          free_swap_slot(slot);         // 스왑 공간 반환 (네 함수 이름에 맞게)
+        }
+        *pte = 0;                       // PTE 비우고 다음 페이지로
+        continue;
       }
+
+      // 스왑 비트도 아니고, V도 안 켜져있으면 진짜 이상한 상황 → panic
+      panic("uvmunmap: not mapped");
     }
 
+    // 여기까지 왔으면 PTE_V == 1 → 실제 메모리에 있는 페이지
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("uvmunmap: not leaf");
+
+    if(do_free){
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);   // 물리 페이지 해제
+    }
     *pte = 0;
   }
 }
+
+
+
 
 // create an empty user page table.
 // returns 0 if out of memory.
@@ -342,33 +343,35 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   for(a = oldsz; a < newsz; a += PGSIZE){
     mem = kalloc();
     if(mem == 0){
+      // 지금까지 할당한 부분 되돌리기
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
-    if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+
+    if(mappages(pagetable, a, PGSIZE, (uint64)mem,
+                PTE_R | PTE_U | xperm) != 0){
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
-  }
 
-    // === 여기부터 pa4: LRU 리스트에 등록 ===
-    // mem 은 kalloc이 준 물리 페이지의 커널 주소(=사실상 pa)
+    // ===== LRU 리스트에 등록 =====
+    // kalloc이 리턴한 mem은 "해당 물리 페이지의 커널 주소"라고 보면 되고,
+    // xv6에선 커널주소 == 물리주소라서 바로 /PGSIZE 해서 인덱스로 사용 가능.
     uint64 pa = (uint64)mem;
-    int idx = pa / PGSIZE;          // 이 물리 페이지가 pages[]에서 몇 번째인지
-
+    int idx = pa / PGSIZE;
     struct page *pg = &pages[idx];
-    pg->pagetable = pagetable;      // 어느 프로세스의 페이지인지
-    pg->vaddr     = (char*)a;       // 이 물리페이지가 매핑된 유저 가상주소
-    pg->next = pg->prev = 0;        // (안 해도 BSS가 0이지만 안전하게)
-
-    lru_add(pg);                    // LRU(원형 리스트) tail 쪽에 붙이기
-    // === pa4: LRU 등록 끝 ===
-  } 
+    pg->pagetable = pagetable;
+    pg->vaddr     = (char*)a;
+    lru_add(pg);
+  }
 
   return newsz;
 }
+
+
+
 
 // Deallocate user pages to bring the process size from oldsz to
 // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
@@ -631,6 +634,9 @@ swapinit(void)
 int
 swapout(void)
 {
+
+    printf("swapout called\n");
+    
   // 1. LRU에서 victim 후보를 찾는다 (clock 알고리즘 비슷하게)
   acquire(&lru_lock);
 
@@ -715,6 +721,7 @@ swapout(void)
 int
 swapin(pagetable_t pagetable, uint64 va)
 {
+  printf("swapin called\n");
   // 1. va를 페이지 경계로 내림 (페이지 시작 주소)
   va = PGROUNDDOWN(va);
 
