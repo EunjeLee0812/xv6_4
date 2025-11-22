@@ -275,40 +275,40 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if(pte == 0)
       panic("uvmunmap: walk");
 
+    // 1) 우선 PTE_V가 꺼져 있는 경우 (메모리에 없음)
     if((*pte & PTE_V) == 0){
-      // ⭐ 여기서부터 스왑된 페이지 처리
-      if(*pte & PTE_SWAPPED){          // 네가 정의한 "스왑됐다" 비트
-        // 이 페이지는 디스크에만 있고, 메모리에는 없음.
-        // do_free == 1 이면, 스왑 슬롯도 같이 free.
-        
+      // 스왑된 페이지인 경우
+      if(*pte & PTE_SWAPPED){
         if(do_free){
-          uint64 pa = PTE2PA(*pte);
-
-          // LRU에서 제거
-          int idx = pa2pageidx(pa);
-          struct page *pg = &pages[idx];
-          acquire(&lru_lock);
-          lru_remove(pg);
-          release(&lru_lock);
-
-          kfree((void*)pa);
+          // 이 PTE에는 (slot << 10) 이 들어있으므로
+          // PTE2PA(*pte) = (slot << 12) => slot = PTE2PA(*pte) / PGSIZE;
+          int slot = PTE2PA(*pte) / PGSIZE;
+          free_swap_slot(slot);     // ✅ 스왑 슬롯만 반납
         }
-          
-        *pte = 0;                       // PTE 비우고 다음 페이지로
+        *pte = 0;                   // PTE 지우기
         continue;
       }
 
-      // 스왑 비트도 아니고, V도 안 켜져있으면 진짜 이상한 상황 → panic
+      // 스왑도 아니고 V도 안 켜져 있으면 진짜 이상한 상황
       panic("uvmunmap: not mapped");
     }
 
-    // 여기까지 왔으면 PTE_V == 1 → 실제 메모리에 있는 페이지
+    // 2) 여기까지 왔으면 PTE_V == 1 → 메모리에 있는 leaf 페이지여야 함
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not leaf");
 
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);   // 물리 페이지 해제
+
+      // ✅ LRU에서 제거
+      int idx = pa2pageidx(pa);
+      struct page *pg = &pages[idx];
+      acquire(&lru_lock);
+      lru_remove(pg);
+      release(&lru_lock);
+
+      // 물리 페이지 free
+      kfree((void*)pa);
     }
     *pte = 0;
   }
@@ -516,7 +516,9 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       struct page *pg = &pages[idx];
       pg->pagetable = new;
       pg->vaddr     = (char*)i;
+      acquire(&lru_lock);
       lru_add(pg);
+      acquire(&lru_lock);
 
       // 부모 쪽은 그대로 스왑 상태 유지 (PTE는 건드리지 않음)
 
@@ -796,7 +798,7 @@ swapin(pagetable_t pagetable, uint64 va)
 
   // 9. LRU 리스트에 다시 등록
   //    pa -> 몇 번째 페이지인지 계산해서 pages[]에서 struct page*를 찾는다.
-  int idx = (pa-KERNBASE) / PGSIZE;         // pa는 0~PHYSTOP 범위라고 가정
+  int idx = pa2pageidx(pa);
   struct page *pg = &pages[idx];
 
   pg->pagetable = pagetable;
