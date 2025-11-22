@@ -435,24 +435,75 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+
+    if(*pte & PTE_V){
+      // 1) 메모리에 있는 페이지 복사
+      pa    = PTE2PA(*pte);
+      flags = PTE_FLAGS(*pte);
+
+      if((mem = kalloc()) == 0)
+        goto err;
+
+      memmove(mem, (char*)pa, PGSIZE);
+
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        goto err;
+      }
+
+      // LRU 등록
+      int idx = (uint64)mem / PGSIZE;
+      struct page *pg = &pages[idx];
+      pg->pagetable = new;
+      pg->vaddr     = (char*)i;
+      lru_add(pg);
+
+    } else if(*pte & PTE_SWAPPED){
+      // 2) 부모가 swapout된 페이지인 경우
+
+      // slot 번호 꺼내기: swapout 때 (slot<<10) 넣었으니까
+      int slot = PTE2PA(*pte) / PGSIZE;
+
+      // R/W/X/U 플래그만 남기고, PTE_SWAPPED 제거
+      flags = PTE_FLAGS(*pte) & ~PTE_SWAPPED;
+
+      // 자식용 물리 페이지
+      if((mem = kalloc()) == 0)
+        goto err;
+
+      // swap 공간에서 자식 물리 페이지로 직접 읽어오기
+      swapread((uint64)mem, slot);
+
+      // 자식 PTE는 "메모리에 있는 정상 페이지"로 매핑
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags | PTE_V) != 0){
+        kfree(mem);
+        goto err;
+      }
+
+      // LRU 등록
+      int idx = (uint64)mem / PGSIZE;
+      struct page *pg = &pages[idx];
+      pg->pagetable = new;
+      pg->vaddr     = (char*)i;
+      lru_add(pg);
+
+      // 부모 쪽은 그대로 스왑 상태 유지 (PTE는 건드리지 않음)
+
+    } else {
+      // V도 아니고 SWAPPED도 아니면 이 범위 안에서는 안 나와야 하는 케이스
+      // (guard page 등을 쓰면 여기서 예외 처리해도 되는데, 과제 기준으로 panic이 안전)
       panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
     }
   }
   return 0;
 
- err:
+err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
+
+
+
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
