@@ -125,23 +125,31 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
-  // Allocate a trapframe page.
+  // [수정] kalloc은 swap 때문에 sleep할 수 있으므로 lock을 해제해야 함
+  release(&p->lock);
+
+  // 1. 트랩프레임 할당
+  // 락 없이 구조체에 직접 할당해도 안전함 (아직 아무도 이 프로세스를 모르기 때문)
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    acquire(&p->lock); // freeproc을 부르기 위해 다시 락 획득
     freeproc(p);
     release(&p->lock);
     return 0;
   }
 
-  // An empty user page table.
+  // 2. 페이지 테이블 생성
+  // proc_pagetable 내부에서도 kalloc을 쓰므로 락 없는 상태 유지
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
-    freeproc(p);
+    acquire(&p->lock); // freeproc을 부르기 위해 다시 락 획득
+    freeproc(p);       // 이미 할당된 p->trapframe도 여기서 같이 정리됨
     release(&p->lock);
     return 0;
   }
 
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
+  // 3. 모든 할당 성공 후 다시 락 획득
+  acquire(&p->lock);
+  
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
@@ -495,12 +503,34 @@ sched(void)
 
   if(!holding(&p->lock))
     panic("sched p->lock");
-  if(mycpu()->noff != 1)
+  if(mycpu()->noff != 1){
+        // ★★ 디버그 출력 추가 ★★
+    printf("sched: noff=%d pid=%d name=%s\n",
+    mycpu()->noff, p ? p->pid : -1, p ? p->name : "none");
+
+    extern struct {
+      struct spinlock lock;
+      struct run *freelist;
+    } kmem;
+
+    // 은제가 만든 애들 + 원래 있는 타이머 락
+    extern struct spinlock lru_lock;
+    extern struct spinlock tickslock;
+    extern struct spinlock swap_lock;
+    extern struct spinlock wait_lock;
+    printf("  holding kmem.lock   = %d\n", holding(&kmem.lock));
+    printf("  holding lru_lock    = %d\n", holding(&lru_lock));
+    printf("  holding swap_lock   = %d\n", holding(&swap_lock));
+    printf("  holding wait_lock   = %d\n", holding(&wait_lock));
+    printf("  holding tickslock   = %d\n", holding(&tickslock));
+
     panic("sched locks");
+  }
   if(p->state == RUNNING)
     panic("sched running");
   if(intr_get())
     panic("sched interruptible");
+  
 
   intena = mycpu()->intena;
   swtch(&p->context, &mycpu()->context);

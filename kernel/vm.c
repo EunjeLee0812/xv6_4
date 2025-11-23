@@ -16,7 +16,7 @@ struct spinlock lru_lock;
 
 static uint8 *swap_bitmap;
 static uint32 swap_slots;
-static struct spinlock swap_lock;
+struct spinlock swap_lock;
 
 extern struct page pages[(PHYSTOP-KERNBASE)/PGSIZE];
 
