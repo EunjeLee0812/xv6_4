@@ -12,11 +12,11 @@
  */
 struct page *lru_head = 0;
 struct page *lru_tail = 0;
-struct spinlock lru_lock;
+static struct spinlock lru_lock;
 
 static uint8 *swap_bitmap;
 static uint32 swap_slots;
-struct spinlock swap_lock;
+static struct spinlock swap_lock;
 
 extern struct page pages[(PHYSTOP-KERNBASE)/PGSIZE];
 

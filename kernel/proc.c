@@ -295,9 +295,14 @@ fork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
+  
+
+  release(&np->lock);
+
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    acquire(&np->lock);
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -319,8 +324,6 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
-
-  release(&np->lock);
 
   acquire(&wait_lock);
   np->parent = p;
@@ -504,26 +507,6 @@ sched(void)
   if(!holding(&p->lock))
     panic("sched p->lock");
   if(mycpu()->noff != 1){
-        // ★★ 디버그 출력 추가 ★★
-    printf("sched: noff=%d pid=%d name=%s\n",
-    mycpu()->noff, p ? p->pid : -1, p ? p->name : "none");
-
-    extern struct {
-      struct spinlock lock;
-      struct run *freelist;
-    } kmem;
-
-    // 은제가 만든 애들 + 원래 있는 타이머 락
-    extern struct spinlock lru_lock;
-    extern struct spinlock tickslock;
-    extern struct spinlock swap_lock;
-    extern struct spinlock wait_lock;
-    printf("  holding kmem.lock   = %d\n", holding(&kmem.lock));
-    printf("  holding lru_lock    = %d\n", holding(&lru_lock));
-    printf("  holding swap_lock   = %d\n", holding(&swap_lock));
-    printf("  holding wait_lock   = %d\n", holding(&wait_lock));
-    printf("  holding tickslock   = %d\n", holding(&tickslock));
-
     panic("sched locks");
   }
   if(p->state == RUNNING)
