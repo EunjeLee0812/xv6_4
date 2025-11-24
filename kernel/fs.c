@@ -64,6 +64,7 @@ bzero(int dev, int bno)
 
 // Allocate a zeroed disk block.
 // returns 0 if out of disk space.
+
 static uint
 balloc(uint dev)
 {
@@ -71,12 +72,19 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
+
+  // 파일 시스템이 실제로 써도 되는 마지막 블록 번호
+  // (SWAPBASE가 sb.size보다 크면 sb.size까지만)
+  int limit = SWAPBASE;
+  if(limit > sb.size)
+    limit = sb.size;
+
+  for(b = 0; b < limit; b += BPB){
     bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+    for(bi = 0; bi < BPB && b + bi < limit; bi++){
       m = 1 << (bi % 8);
-      if((bp->data[bi/8] & m) == 0){  // Is block free?
-        bp->data[bi/8] |= m;  // Mark block in use.
+      if((bp->data[bi/8] & m) == 0){  // free block?
+        bp->data[bi/8] |= m;          // mark used
         log_write(bp);
         brelse(bp);
         bzero(dev, b + bi);
@@ -85,9 +93,12 @@ balloc(uint dev)
     }
     brelse(bp);
   }
+
   printf("balloc: out of blocks\n");
   return 0;
 }
+
+
 
 // Free a disk block.
 static void
